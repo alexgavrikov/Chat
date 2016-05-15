@@ -1,9 +1,9 @@
 Собрать сервер-программу:
 
-  make -f ServerMakefile
+    make -f ServerMakefile
 
 Собрать клиент-программу:
 
-  make -f ClientMakefile
+    make -f ClientMakefile
   
   Сначала запустить сервер, а потом сколько угодно клиентов. Сообщения отправлять через Enter.
