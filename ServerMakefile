@@ -1,0 +1,22 @@
+CXXFLAGS =	-O2 -g -Wall -fmessage-length=0
+
+CXX=g++
+
+OBJ1 =		server.o
+
+SRC1=  $(OBJ1:.o=.cpp)
+
+OBJS= $(OBJ1)
+
+LIBS =   
+
+TARGET =	 $(OBJ1:.o=.exe)
+
+$(TARGET):	$(OBJS)
+	$(CXX) -pthread $(OBJS) -o $(TARGET)
+
+all:	$(TARGET)
+
+$(OBJ1): $(SRC1) socket.h thread_pool.h
+	g++ -c -std=c++11 -x c++ $(SRC1)
+	
