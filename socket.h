@@ -16,8 +16,9 @@ class TDataHandler {
 public:
   bool ProcessReceivedData(const char *data, size_t sz) {
     std::unique_lock<std::mutex> lock(mutex);
-    for (; sz > 0; --sz, ++data)
+    for (; sz > 0; --sz, ++data) {
       std::cout << *data;
+    }
     std::cout << std::flush;
     return false;
   }
@@ -54,7 +55,7 @@ private:
     }
   };
   using TSocketPtr = std::shared_ptr<TSocketHolder>;
-  TSocketPtr listener_socket_holder_;
+  TSocketPtr socket_holder_;
 
   bool ResolveHost(const std::string &host, int &addr) const {
     hostent *ent = gethostbyname(host.c_str());
@@ -69,14 +70,14 @@ private:
 
 public:
   TSocket()
-      : listener_socket_holder_(new TSocketHolder) {
+      : socket_holder_(new TSocketHolder) {
   }
   TSocket(int sock)
-      : listener_socket_holder_(new TSocketHolder(sock)) {
+      : socket_holder_(new TSocketHolder(sock)) {
   }
 
   int GetSocket() const {
-    return listener_socket_holder_->GetSocket();
+    return socket_holder_->GetSocket();
   }
 
   void Connect(const std::string &host, int port) {
@@ -87,8 +88,8 @@ public:
     address.sin_family = AF_INET;
     address.sin_port = htons(port);
     address.sin_addr.s_addr = addr;
-    if (connect(listener_socket_holder_->GetSocket(), reinterpret_cast<sockaddr*>(&address),
-        sizeof(address)) < 0)
+    if (connect(socket_holder_->GetSocket(), reinterpret_cast<sockaddr*>(&address), sizeof(address))
+        < 0)
       throw std::runtime_error("can't connect");
   }
   void Bind(int port, const std::string &host) {
@@ -102,12 +103,11 @@ public:
       address.sin_addr.s_addr = addr;
     } else {
       address.sin_addr.s_addr = INADDR_ANY;
-      std::cout << INADDR_ANY<<std::endl;
     }
-    if (bind(listener_socket_holder_->GetSocket(), reinterpret_cast<sockaddr*>(&address),
-        sizeof(address)) < 0)
+    if (bind(socket_holder_->GetSocket(), reinterpret_cast<sockaddr*>(&address), sizeof(address))
+        < 0)
       throw std::runtime_error("can't bind");
-    if (listen(listener_socket_holder_->GetSocket(), 1) < 0)
+    if (listen(socket_holder_->GetSocket(), 1) < 0)
       throw std::runtime_error("can't start listening");
   }
 
@@ -115,7 +115,7 @@ public:
   template<typename TAcceptHandler>
   void AcceptLoop(TAcceptHandler &handler) const {
     for (;;) {
-      int sock = accept(listener_socket_holder_->GetSocket(), nullptr, nullptr);
+      int sock = accept(socket_holder_->GetSocket(), nullptr, nullptr);
       if (sock < 0)
         throw std::runtime_error("can't bind");
       TSocket res(sock);
@@ -130,14 +130,10 @@ public:
     static constexpr size_t kInitialThreadsCount = 2;
     static constexpr size_t kTimeOutInSeconds = 5;
     // I don't want listener-socket to block during accept
-    fcntl(listener_socket_holder_->GetSocket(), F_SETFL, O_NONBLOCK);
-    // Let's use 'select' function. We sleep in it
+    fcntl(socket_holder_->GetSocket(), F_SETFL, O_NONBLOCK);
+    // Let's use 'select' function. We sleep on it
     // until events happen in sockets or streams.
-    // Timeout is for preventing infinite sleeping.
-    timeval timeout;
-    timeout.tv_sec = 5;
-    timeout.tv_usec = 0;
-    int max_socket_to_check = listener_socket_holder_->GetSocket();
+    // Timeout prevents infinite sleeping.
 
     ThreadPool threads_pool(kInitialThreadsCount);
     // One common datahandler for all threads. It contains mutex
@@ -149,31 +145,29 @@ public:
     // its value.
     std::atomic<bool> time_to_stop_all_threads(false);
     while (true) {
-      // std::cout << "main: " << "start while-iteraton" << std::endl;
       // Preparing a set of sockets to be checked for events
+      int max_socket_to_check = socket_holder_->GetSocket();
+      timeval timeout;
+      timeout.tv_sec = 15;
+      timeout.tv_usec = 0;
       fd_set readset;
       FD_ZERO(&readset);
-      FD_SET(listener_socket_holder_->GetSocket(), &readset);
-      if (select(max_socket_to_check + 1, &readset, NULL, NULL, &timeout)
-          <= 0) {
-        // std::cout << "main: " << "time-out" << std::endl;
+      FD_SET(socket_holder_->GetSocket(), &readset);
+      if (select(max_socket_to_check + 1, &readset, NULL, NULL, &timeout) <= 0) {
         if (threads_pool.UnfinishedTasksCount() < kMinimalClientsCount) {
           // Only one client in chat. Our chat doesn't make any sense.
           std::cout << "main: " << "Too few clients => break" << std::endl;
           break;
         }
       } else {
-//        std::cout << "main: " << "else-section (accept found)"
-//            << std::endl;
-        int sock = accept(listener_socket_holder_->GetSocket(), nullptr, nullptr);
+        int sock = accept(socket_holder_->GetSocket(), nullptr, nullptr);
         if (sock < 0) {
           std::cout << "can't bind" << std::endl;
         } else {
           TSocket res(sock);
-          auto future = threads_pool.enqueue(
-              [&res, &handler, &time_to_stop_all_threads] () {
-                res.RecvLoop(handler, time_to_stop_all_threads);
-              });
+          auto future = threads_pool.enqueue([res, &handler, &time_to_stop_all_threads] () {
+            res.RecvLoop(handler, time_to_stop_all_threads);
+          });
         }
       }
     }
@@ -184,7 +178,7 @@ public:
 
   bool Send(const char *data, size_t sz) const {
     for (; sz > 0;) {
-      int res = send(listener_socket_holder_->GetSocket(), data, sz, 0);
+      int res = send(socket_holder_->GetSocket(), data, sz, 0);
       if (res == 0)
         return false;
       if (res < 0)
@@ -205,32 +199,25 @@ public:
 
   // returns true if connection was closed by handler, false if connection was closed by peer
   template<typename TIOHandler>
-  bool RecvLoop(TIOHandler &handler,
-                const std::atomic<bool>& time_to_stop) const {
-//    std::cout << "  non-main: " << "just started" << std::endl;
+  bool RecvLoop(TIOHandler &handler, const std::atomic<bool>& time_to_stop) const {
     // I don't want client-socket to block during recv
-    fcntl(listener_socket_holder_->GetSocket(), F_SETFL, O_NONBLOCK);
+    fcntl(socket_holder_->GetSocket(), F_SETFL, O_NONBLOCK);
     // Let's use 'select' function. We sleep in it
     // until events happen in sockets or streams.
     // Timeout is for preventing infinite sleeping.
-    timeval timeout;
-    timeout.tv_sec = 5;
-    timeout.tv_usec = 0;
-    int max_socket_to_check = listener_socket_holder_->GetSocket();
 
-    while (!time_to_stop.load()) {
-//      std::cout << "  non-main: " << "new while-iteration" << std::endl;
+    while (!time_to_stop) {
       // Preparing a set of sockets to be checked for events
+      int max_socket_to_check = socket_holder_->GetSocket();
+      timeval timeout;
+      timeout.tv_sec = 5;
+      timeout.tv_usec = 0;
       fd_set readset;
       FD_ZERO(&readset);
-      FD_SET(listener_socket_holder_->GetSocket(), &readset);
-      if (select(max_socket_to_check + 1, &readset, NULL, NULL, &timeout)
-          > 0) {
-//        std::cout << "  non-main: " << "gonna receive"
-//            << std::endl;
+      FD_SET(socket_holder_->GetSocket(), &readset);
+      if (select(max_socket_to_check + 1, &readset, NULL, NULL, &timeout) > 0) {
         char buf[1024];
-        int res = recv(listener_socket_holder_->GetSocket(), buf, sizeof(buf), 0);
-//        std::cout << "  non-main: " << "received" << std::endl;
+        int res = recv(socket_holder_->GetSocket(), buf, sizeof(buf), 0);
         if (res == 0)
           return false;
         if (res < 0) {
@@ -241,7 +228,7 @@ public:
       }
     }
 
-    Send("BYE\0", 4);
+    Send("BYE", 3);
     return true;
   }
 };
