@@ -10,7 +10,7 @@ OBJS= $(OBJ1)
 
 LIBS =   
 
-TARGET =	 $(OBJ1:.o=.exe)
+TARGET =	 $(OBJ1:.o=)
 
 $(TARGET):	$(OBJS)
 	$(CXX) -pthread $(OBJS) -o $(TARGET)
